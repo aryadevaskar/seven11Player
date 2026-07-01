@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import baseStoreImg from './assets/base-store.png';
 import { type PalettePreset } from './App';
+import { useMemo } from 'react';
 
 interface KonbiniProps {
     palette: PalettePreset;
@@ -9,9 +10,30 @@ interface KonbiniProps {
         mid: number;
         treble: number;
     };
+    valence: number; // 0 = sad/heavy rain, 1 = happy/clear
 }
 
-export default function KonbiniScene({ palette, audio }: KonbiniProps) {
+// Pre-generate raindrop data so it doesn't re-randomize on every render
+function generateRaindrops(count: number) {
+    return Array.from({ length: count }, (_, i) => ({
+        id: i,
+        left: Math.random() * 100,
+        delay: Math.random() * 1.5,
+        duration: 0.25 + Math.random() * 0.35, // faster fall
+        opacity: 0.55 + Math.random() * 0.45,  // much more opaque
+        height: 18 + Math.random() * 28,        // longer streaks
+        width: 1.5 + Math.random() * 1,         // variable width
+    }));
+}
+
+export default function KonbiniScene({ palette, audio, valence }: KonbiniProps) {
+    // valence 0–0.35 = heavy rain, 0.35–0.6 = light drizzle, >0.6 = barely there
+    // Clamp so we always have at least a light drizzle visible
+    const rainIntensity = Math.max(0.3, 1 - valence * 1.4);
+    const dropCount = Math.round(rainIntensity * 120); // up to 120 drops
+    const raindrops = useMemo(() => generateRaindrops(130), []);
+    const visibleDrops = raindrops.slice(0, dropCount);
+    
     return (
         <div className="relative w-full aspect-[1.777] overflow-hidden rounded-2xl border border-slate-800/60 bg-slate-950">
 
@@ -70,6 +92,50 @@ export default function KonbiniScene({ palette, audio }: KonbiniProps) {
                 }}
                 transition={{ type: "spring", stiffness: 300, damping: 20 }}
             />
+
+            {/* LAYER 7: RAIN OVERLAY — driven by song valence */}
+            {visibleDrops.length > 0 && (
+                <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
+
+                    {/* Blue atmospheric fog — intensifies in heavy rain */}
+                    <div
+                        className="absolute inset-0"
+                        style={{
+                            background: `linear-gradient(160deg, rgba(80,130,200,${rainIntensity * 0.13}) 0%, transparent 60%)`,
+                        }}
+                    />
+
+                    {visibleDrops.map((drop) => (
+                        <motion.div
+                            key={drop.id}
+                            className="absolute top-0"
+                            style={{
+                                left: `${drop.left}%`,
+                                width: `${drop.width}px`,
+                                height: `${drop.height}px`,
+                                background: 'linear-gradient(to bottom, transparent, rgba(160,210,255,0.95))',
+                                opacity: drop.opacity * rainIntensity,
+                                borderRadius: '0 0 2px 2px',
+                            }}
+                            animate={{ y: [-30, 720] }}
+                            transition={{
+                                duration: drop.duration,
+                                delay: drop.delay,
+                                repeat: Infinity,
+                                ease: 'linear',
+                            }}
+                        />
+                    ))}
+
+                    {/* Wet pavement glow at the bottom */}
+                    <div
+                        className="absolute bottom-0 left-0 right-0 h-[22%] pointer-events-none"
+                        style={{
+                            background: `linear-gradient(to top, rgba(80,150,230,${rainIntensity * 0.35}), transparent)`,
+                        }}
+                    />
+                </div>
+            )}
 
         </div>
     );

@@ -34,7 +34,7 @@ export default function App() {
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
   const [palette, setPalette] = useState<PalettePreset>(DEFAULT_PALETTE);
   
-  const [audioFeatures, setAudioFeatures] = useState({ energy: 0.5, tempo: 120 });
+  const [audioFeatures, setAudioFeatures] = useState({ energy: 0.5, tempo: 120, valence: 0.5 });
   const [audio, setAudio] = useState({ bass: 0.5, mid: 0.5, treble: 0.5 });
   const audioFeaturesRef = useRef(audioFeatures);
 
@@ -150,6 +150,7 @@ export default function App() {
                 setAudioFeatures({
                   energy: features.energy,
                   tempo: features.tempo,
+                  valence: features.valence,
                 });
               }
             } else {
@@ -299,7 +300,7 @@ export default function App() {
         </header>
 
         <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-emerald-900/20">
-          <KonbiniScene palette={palette} audio={audio} />
+          <KonbiniScene palette={palette} audio={audio} valence={audioFeatures.valence} />
           
           {!token && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-md transition-all duration-500">
@@ -320,6 +321,24 @@ export default function App() {
               </button>
             </div>
           )}
+        </div>
+
+        {/* LED TICKER — scrolls song info in a retro marquee */}
+        <div
+          className="w-full overflow-hidden bg-slate-950 border border-slate-800 rounded-xl py-2"
+          style={{ maskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)' }}
+        >
+          <div
+            className="whitespace-nowrap font-mono text-xs tracking-widest animate-[marquee_18s_linear_infinite]"
+            style={{ color: palette.neonVisualizer || '#ec4899' }}
+          >
+            {/* Duplicate text for seamless loop */}
+            {[0, 1].map(i => (
+              <span key={i} className="inline-block px-16">
+                ♫ &nbsp; {palette.trackName} &nbsp;—&nbsp; {palette.artistName} &nbsp;&nbsp;&nbsp;✦&nbsp;&nbsp;&nbsp; NOW PLAYING ON KONBINI VISUALIZER &nbsp;&nbsp;&nbsp;✦&nbsp;&nbsp;&nbsp;
+              </span>
+            ))}
+          </div>
         </div>
 
         <footer className={`w-full bg-slate-900/60 border border-slate-800 p-4 rounded-2xl flex items-center justify-between backdrop-blur-xl transition-opacity duration-500 ${token ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>

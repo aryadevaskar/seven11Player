@@ -270,9 +270,10 @@ export default function App() {
 
   // ================= DESKTOP VIEW =================
   
-  // Create QR URL pointing to the app root, appending the mobile login flags
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5173';
-  const qrUrl = `${origin}/?mobileLogin=true&sessionId=${sessionId}`;
+  // QR code MUST always point to the live Vercel URL so phones can reach it
+  // (window.location.origin would be 127.0.0.1 on local dev — unreachable by phone)
+  const VERCEL_URL = "https://konbiniplayer.vercel.app";
+  const qrUrl = `${VERCEL_URL}/?mobileLogin=true&sessionId=${sessionId}`;
 
   return (
     <div className="relative w-screen h-screen flex flex-col items-center justify-center p-6 text-slate-100 overflow-hidden bg-[#020617]">

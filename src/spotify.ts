@@ -1,7 +1,11 @@
 import SpotifyWebApi from 'spotify-web-api-js';
 
 const clientId = "af2960b28dcf42419dfc623e1f1acb72";
-const redirectUri = "http://127.0.0.1:5173/callback";
+export const getRedirectUri = () => {
+    // Determine redirect URI dynamically, fallback to localhost if window is undefined
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5173';
+    return `${origin}/callback`;
+};
 const scopes = [
   "user-read-currently-playing",
   "user-read-playback-state",
@@ -41,7 +45,7 @@ export const redirectToAuthCodeFlow = async () => {
     scope: scopes.join(" "),
     code_challenge_method: 'S256',
     code_challenge: codeChallenge,
-    redirect_uri: redirectUri,
+    redirect_uri: getRedirectUri(),
   }
 
   authUrl.search = new URLSearchParams(params).toString();
@@ -61,7 +65,7 @@ export const getAccessToken = async (code: string) => {
       client_id: clientId,
       grant_type: 'authorization_code',
       code,
-      redirect_uri: redirectUri,
+      redirect_uri: getRedirectUri(),
       code_verifier: codeVerifier,
     }),
   }

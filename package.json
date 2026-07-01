@@ -13,10 +13,13 @@
     "@tailwindcss/vite": "^4.3.2",
     "buffer": "^6.0.3",
     "colorthief": "^3.3.1",
+    "firebase": "^12.15.0",
     "framer-motion": "^12.42.2",
+    "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "spotify-web-api-js": "^1.5.2"
+    "spotify-web-api-js": "^1.5.2",
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "@types/colorthief": "^2.6.1",
@@ -24,6 +27,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/spotify-web-api-js": "^0.0.27",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.2",
     "oxlint": "^1.71.0",

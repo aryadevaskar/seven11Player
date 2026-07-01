@@ -2,6 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import KonbiniScene from './KonbiniScene';
 import { redirectToAuthCodeFlow, getAccessToken, spotifyApi } from './spotify';
 import { getPaletteSync } from 'colorthief';
+import { QRCodeSVG } from 'qrcode.react';
+import { v4 as uuidv4 } from 'uuid';
+import { database } from './firebase';
+import { ref, onValue, set, remove } from 'firebase/database';
 
 export interface PalettePreset {
   trackName: string;
@@ -34,53 +38,104 @@ export default function App() {
   const [audio, setAudio] = useState({ bass: 0.5, mid: 0.5, treble: 0.5 });
   const audioFeaturesRef = useRef(audioFeatures);
 
+  // Session state for QR Login
+  const [sessionId, setSessionId] = useState<string>('');
+  const [isMobileLogin, setIsMobileLogin] = useState<boolean>(false);
+  const [mobileConnected, setMobileConnected] = useState<boolean>(false);
+
   // Keep a ref of audio features for the fast setInterval loop
   useEffect(() => {
     audioFeaturesRef.current = audioFeatures;
   }, [audioFeatures]);
 
-  // Auth Effect for PKCE flow
+  // Auth & Session Effect
   useEffect(() => {
-    const savedToken = localStorage.getItem('spotify_access_token');
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
+    const paramMobile = params.get("mobileLogin") === 'true';
+    const paramSession = params.get("sessionId");
+    
+    // Restore from localStorage in case we are returning from Spotify redirect
+    const savedMobile = localStorage.getItem('isMobileLogin') === 'true';
+    const savedSession = localStorage.getItem('mobileSessionId');
+    const isMobileContext = paramMobile || savedMobile;
+    const activeSessionId = paramSession || savedSession;
+
+    setIsMobileLogin(isMobileContext);
 
     if (code) {
-      // We have a code from redirect, let's exchange it for a token
-      window.history.replaceState({}, document.title, window.location.pathname); // clear code from url
+      // Clear code from URL
+      window.history.replaceState({}, document.title, window.location.pathname); 
       getAccessToken(code).then((newToken) => {
         if (newToken) {
-          setToken(newToken);
-          spotifyApi.setAccessToken(newToken);
+          if (isMobileContext && activeSessionId) {
+             // We are on mobile: Send token to Firebase Database
+             set(ref(database, `sessions/${activeSessionId}`), {
+                token: newToken
+             }).then(() => {
+                setMobileConnected(true);
+                // Clean up local mobile state so it doesn't loop next time
+                localStorage.removeItem('isMobileLogin');
+                localStorage.removeItem('mobileSessionId');
+             });
+          } else {
+             // We are on desktop: Standard direct login
+             setToken(newToken);
+             spotifyApi.setAccessToken(newToken);
+          }
         }
       });
-    } else if (savedToken) {
-      // Use existing saved token
-      setToken(savedToken);
-      spotifyApi.setAccessToken(savedToken);
+    } else {
+      const savedToken = localStorage.getItem('spotify_access_token');
+      if (savedToken && !isMobileContext) {
+        setToken(savedToken);
+        spotifyApi.setAccessToken(savedToken);
+      } else if (!isMobileContext) {
+        // Desktop Mode: Generate a session ID and listen to Firebase
+        const newSessionId = uuidv4();
+        setSessionId(newSessionId);
+
+        const sessionRef = ref(database, `sessions/${newSessionId}`);
+        const unsubscribe = onValue(sessionRef, (snapshot) => {
+           const data = snapshot.val();
+           if (data && data.token) {
+              setToken(data.token);
+              spotifyApi.setAccessToken(data.token);
+              localStorage.setItem('spotify_access_token', data.token);
+              // Clean up the token from DB for security
+              remove(sessionRef);
+           }
+        });
+        return () => unsubscribe(); // Cleanup listener on unmount
+      } else if (isMobileContext && activeSessionId) {
+        // Mobile Mode: Prepare to redirect
+        setSessionId(activeSessionId);
+      }
     }
   }, []);
 
+  const handleMobileLoginRedirect = () => {
+    localStorage.setItem('isMobileLogin', 'true');
+    localStorage.setItem('mobileSessionId', sessionId);
+    redirectToAuthCodeFlow();
+  };
+
   // Polling Effect
   useEffect(() => {
-    if (!token) return;
+    if (!token || isMobileLogin) return; // Don't poll on mobile helper view
 
     const fetchTrack = async () => {
       try {
         const currentPlaying = await spotifyApi.getMyCurrentPlayingTrack();
         
         if (currentPlaying && currentPlaying.item) {
-          // Check if it's a valid track
           if (currentPlaying.item.type === "track") {
             const track = currentPlaying.item as SpotifyApi.TrackObjectFull;
             
             if (track.id !== currentTrackId) {
               setCurrentTrackId(track.id);
-              
-              // Get album art
               const albumArtUrl = track.album.images[0]?.url || DEFAULT_PALETTE.albumArtUrl;
               
-              // Partially update the palette with new text and art right away
               setPalette(prev => ({
                 ...prev,
                 trackName: track.name,
@@ -88,10 +143,8 @@ export default function App() {
                 albumArtUrl,
               }));
 
-              // Extract colours
               extractColors(albumArtUrl);
 
-              // Fetch Audio Features
               const features = await spotifyApi.getAudioFeaturesForTrack(track.id);
               if (features) {
                 setAudioFeatures({
@@ -100,7 +153,6 @@ export default function App() {
                 });
               }
             } else {
-               // Even if ID is same, make sure it updates the name just in case
                setPalette(prev => ({
                  ...prev,
                  trackName: track.name,
@@ -111,18 +163,16 @@ export default function App() {
         }
       } catch (err: any) {
         console.error("Error fetching Spotify data", err);
-        // Basic token expiration fallback: if 401, clear token to trigger re-login
         if (err.status === 401) {
-            localStorage.removeItem('spotify_access_token');
-            setToken(null);
+            logout();
         }
       }
     };
 
     fetchTrack();
-    const interval = setInterval(fetchTrack, 3000); // Poll every 3s
+    const interval = setInterval(fetchTrack, 3000);
     return () => clearInterval(interval);
-  }, [token, currentTrackId]);
+  }, [token, currentTrackId, isMobileLogin]);
 
   const extractColors = (url: string) => {
     const img = new Image();
@@ -153,17 +203,12 @@ export default function App() {
     img.src = url + (url.includes('?') ? '&' : '?') + "not-from-cache";
   };
 
-  // Audio Simulation Effect (driven by Spotify Audio Features)
   useEffect(() => {
+    if (isMobileLogin) return;
     const loop = setInterval(() => {
       const { energy, tempo } = audioFeaturesRef.current;
-      
-      // Calculate a dynamic bounce based on energy and tempo
-      // A faster tempo means a faster wave for the mid frequencies
       const beatDurationMs = (60 / Math.max(tempo, 1)) * 1000;
       const phase = (Date.now() % beatDurationMs) / beatDurationMs; 
-      
-      // Scale visualizer intensity by track energy
       const intensityScale = Math.max(0.2, energy * 1.5); 
 
       setAudio({
@@ -171,16 +216,14 @@ export default function App() {
         mid: (Math.sin(phase * Math.PI * 2) * 0.25 + 0.6) * intensityScale,
         treble: (Math.random() * 0.6 + 0.3) * intensityScale,
       });
-    }, 80); // run slightly faster for smoother updates
-
+    }, 80);
     return () => clearInterval(loop);
-  }, []);
+  }, [isMobileLogin]);
 
   const skipTrack = async () => {
     if (!token) return;
     try {
       await spotifyApi.skipToNext();
-      // Wait a moment for Spotify to switch tracks, then clear the ID to force a full refresh of features and colours
       setTimeout(() => {
         setCurrentTrackId(null);
       }, 500);
@@ -189,32 +232,90 @@ export default function App() {
     }
   };
 
+  const logout = () => {
+    localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_refresh_token');
+    localStorage.removeItem('code_verifier');
+    setToken(null);
+    setCurrentTrackId(null);
+    setPalette(DEFAULT_PALETTE);
+    spotifyApi.setAccessToken('');
+  };
+
+  // ================= MOBILE VIEW =================
+  if (isMobileLogin) {
+    return (
+      <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#020617] text-white p-6">
+         {mobileConnected ? (
+            <div className="text-center animate-pulse">
+              <h2 className="text-3xl font-bold text-emerald-400 mb-4">Connected!</h2>
+              <p className="text-slate-400">Your Konbini is now synchronized.</p>
+              <p className="text-slate-500 mt-2 text-sm">You can safely close this window.</p>
+            </div>
+         ) : (
+            <div className="text-center flex flex-col items-center">
+              <h1 className="text-2xl font-bold mb-8 tracking-widest text-emerald-400 drop-shadow-md">KONBINI REMOTE</h1>
+              <p className="mb-10 text-slate-400 font-mono text-sm max-w-[250px]">Link your phone to synchronize the visualizer instantly.</p>
+              <button 
+                onClick={handleMobileLoginRedirect}
+                className="px-10 py-5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-2xl shadow-xl transition hover:scale-105 active:scale-95"
+              >
+                CONNECT SPOTIFY
+              </button>
+            </div>
+         )}
+      </div>
+    );
+  }
+
+  // ================= DESKTOP VIEW =================
+  
+  // Create QR URL pointing to the app root, appending the mobile login flags
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:5173';
+  const qrUrl = `${origin}/?mobileLogin=true&sessionId=${sessionId}`;
+
   return (
     <div className="relative w-screen h-screen flex flex-col items-center justify-center p-6 text-slate-100 overflow-hidden bg-[#020617]">
       <div className="w-full max-w-4xl flex flex-col gap-6 relative">
         <header className="flex justify-between items-center px-2">
           <div className="font-mono text-xs tracking-widest text-slate-400 uppercase">Convenience Neon System</div>
-          <div className="text-xs font-mono flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${token ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} /> 
-            <span className={token ? 'text-emerald-400' : 'text-rose-500'}>
-              {token ? (currentTrackId ? 'SYNCHRONIZED' : 'LISTENING...') : 'OFFLINE (LOGIN REQUIRED)'}
-            </span>
+          <div className="flex items-center gap-4">
+            <div className="text-xs font-mono flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${token ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} /> 
+              <span className={token ? 'text-emerald-400' : 'text-rose-500'}>
+                {token ? (currentTrackId ? 'SYNCHRONIZED' : 'LISTENING...') : 'OFFLINE (LOGIN REQUIRED)'}
+              </span>
+            </div>
+            {token && (
+              <button 
+                onClick={logout}
+                className="text-xs font-mono text-slate-500 hover:text-rose-400 transition"
+              >
+                [LOGOUT]
+              </button>
+            )}
           </div>
         </header>
 
         <div className="relative rounded-2xl overflow-hidden shadow-2xl shadow-emerald-900/20">
-          {/* Always render the scene so it can be seen in the background */}
           <KonbiniScene palette={palette} audio={audio} />
           
-          {/* Overlay login button if not authenticated */}
           {!token && (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/60 backdrop-blur-sm transition-all duration-500">
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-md transition-all duration-500">
               <h1 className="text-3xl font-bold mb-8 tracking-widest text-emerald-400 drop-shadow-lg text-center px-4">KONBINI<br/>VISUALIZER</h1>
+              
+              {/* QR Code Frame */}
+              <div className="bg-white p-5 rounded-2xl shadow-[0_0_40px_rgba(16,185,129,0.3)] mb-4 flex flex-col items-center transition-transform hover:scale-105">
+                 <QRCodeSVG value={qrUrl} size={180} fgColor="#020617" />
+              </div>
+              
+              <p className="text-emerald-400 font-mono text-xs mb-8 tracking-widest uppercase">Scan to Connect</p>
+
               <button 
                 onClick={() => redirectToAuthCodeFlow()}
-                className="px-8 py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl shadow-xl transition-all hover:scale-105 active:scale-95"
+                className="text-xs text-slate-400 hover:text-emerald-400 transition underline underline-offset-4 font-mono"
               >
-                LOGIN WITH SPOTIFY
+                [ Or login on this device ]
               </button>
             </div>
           )}
